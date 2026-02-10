@@ -1,0 +1,14 @@
+{
+  "locales": {
+    "en": {
+      "delivery_estimate": {
+        "loading": "Calculating delivery date...",
+        "deliver_to": "Deliver to",
+        "change_location": "Change location",
+        "zip_label": "ZIP / Postal Code",
+        "update": "Update",
+        "error": "Unable to calculate delivery date"
+      }
+    }
+  }
+}

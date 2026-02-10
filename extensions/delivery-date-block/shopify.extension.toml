@@ -1,0 +1,10 @@
+api_version = "2024-10"
+
+uid = "360bb0fc-f313-d88d-6639-fd28238dcf51d8cba234"
+
+type = "theme"
+name = "Delivery Date Block"
+
+[[theme_extension.blocks]]
+type = "delivery-date"
+name = "Estimated Delivery Date"

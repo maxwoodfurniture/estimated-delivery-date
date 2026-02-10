@@ -1,0 +1,510 @@
+{% comment %}
+  Estimated Delivery Date Block
+  Displays estimated delivery date based on customer location and FedEx transit times
+{% endcomment %}
+
+{% style %}
+  /* Reset and isolate styles to prevent theme interference */
+  .delivery-estimate,
+  .delivery-estimate *,
+  .delivery-estimate *::before,
+  .delivery-estimate *::after {
+    box-sizing: border-box !important;
+    margin: 0;
+    padding: 0;
+  }
+
+  .delivery-estimate {
+    padding: {{ block.settings.vertical_padding }}px {{ block.settings.horizontal_padding }}px !important;
+    margin: {{ block.settings.margin }}px 0 !important;
+    font-family: inherit !important;
+    font-size: {{ block.settings.font_size }}px !important;
+    font-weight: {{ block.settings.font_weight }} !important;
+    color: {{ block.settings.text_color }} !important;
+    background-color: {{ block.settings.background_color }} !important;
+    {% if block.settings.border_color.alpha > 0 %}
+      border: 1px solid {{ block.settings.border_color }} !important;
+    {% else %}
+      border: none !important;
+    {% endif %}
+    border-radius: {{ block.settings.border_radius }}px !important;
+    line-height: 1.5 !important;
+  }
+
+  .delivery-estimate__container {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+  }
+
+  .delivery-estimate__loading {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .delivery-estimate__loading-spinner {
+    width: 16px !important;
+    height: 16px !important;
+    border: 2px solid {{ block.settings.text_color }} !important;
+    border-top-color: transparent !important;
+    border-radius: 50% !important;
+    animation: delivery-spin 1s linear infinite !important;
+  }
+
+  @keyframes delivery-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .delivery-estimate__main {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+  }
+
+  .delivery-estimate__date {
+    font-weight: {{ block.settings.date_font_weight }} !important;
+    margin: 0 !important;
+  }
+
+  .delivery-estimate__location {
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  .delivery-estimate__location-icon {
+    display: inline-flex !important;
+    align-items: center !important;
+    width: 16px !important;
+    height: 16px !important;
+    flex-shrink: 0 !important;
+  }
+
+  .delivery-estimate__location-icon img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    display: block !important;
+  }
+
+  .delivery-estimate__location-link {
+    text-decoration: underline !important;
+    cursor: pointer !important;
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font: inherit !important;
+    color: {{ block.settings.location_link_color }} !important;
+    display: inline !important;
+  }
+
+  .delivery-estimate__location-link:hover {
+    text-decoration: none !important;
+    color: {{ block.settings.location_link_hover_color }} !important;
+  }
+
+  .delivery-estimate__change-form {
+    display: none !important;
+    margin-top: 8px !important;
+  }
+
+  .delivery-estimate__change-form.is-visible {
+    display: block !important;
+  }
+
+  .delivery-estimate__form-row {
+    display: flex !important;
+    gap: 0 !important;
+    align-items: flex-end !important;
+  }
+
+  .delivery-estimate__form-field {
+    flex: 1 !important;
+    min-width: 0 !important;
+  }
+
+  .delivery-estimate__form-label {
+    display: block !important;
+    font-size: 12px !important;
+    margin-bottom: 4px !important;
+    color: inherit !important;
+  }
+
+  .delivery-estimate__form-input {
+    width: 100% !important;
+    padding: 8px 12px !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    border: 1px solid #ccc !important;
+    border-radius: 4px 0 0 4px !important;
+    font-family: inherit !important;
+    box-sizing: border-box !important;
+    background: #fff !important;
+    color: #000 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+  }
+
+  .delivery-estimate__form-submit {
+    padding: 8px 16px !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    background: {{ block.settings.button_background }} !important;
+    color: {{ block.settings.button_color }} !important;
+    border: 1px solid {{ block.settings.button_background }} !important;
+    border-radius: 0 4px 4px 0 !important;
+    cursor: pointer !important;
+    font-family: inherit !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+  }
+
+  .delivery-estimate__form-submit:hover {
+    opacity: 0.9 !important;
+  }
+
+  .delivery-estimate__error {
+    color: #c41e3a !important;
+    font-size: 14px !important;
+    padding: 8px !important;
+    background: #fff0f0 !important;
+    border-radius: 4px !important;
+    margin: 0 !important;
+  }
+
+  .delivery-estimate--hidden {
+    display: none !important;
+  }
+{% endstyle %}
+
+<div
+  class="delivery-estimate"
+  id="delivery-estimate-{{ block.id }}"
+  data-shop="{{ shop.permanent_domain }}"
+>
+  <div class="delivery-estimate__container">
+    <!-- Loading State -->
+    <div class="delivery-estimate__loading" id="delivery-loading-{{ block.id }}">
+      <div class="delivery-estimate__loading-spinner"></div>
+      <span>{{ block.settings.loading_text }}</span>
+    </div>
+
+    <!-- Main Content (hidden until loaded) -->
+    <div class="delivery-estimate__main delivery-estimate--hidden" id="delivery-main-{{ block.id }}">
+      <div class="delivery-estimate__location">
+        {% if block.settings.icon %}
+        <span class="delivery-estimate__location-icon">
+          {{ block.settings.icon | image_url: width: 16, height: 16 | image_tag }}
+        </span>
+        {% endif %}
+        <span>{{ block.settings.deliver_to_text }}</span>
+        <button
+          type="button"
+          class="delivery-estimate__location-link"
+          id="delivery-location-{{ block.id }}"
+          aria-expanded="false"
+          aria-controls="delivery-form-{{ block.id }}"
+        >
+          <!-- Populated by JavaScript -->
+        </button>
+        :
+        <span class="delivery-estimate__date" id="delivery-date-{{ block.id }}">
+          <!-- Populated by JavaScript -->
+        </span>
+      </div>
+    </div>
+
+    <!-- Change Location Form (hidden by default) -->
+    <div class="delivery-estimate__change-form" id="delivery-form-{{ block.id }}">
+      <div class="delivery-estimate__form-row">
+        <div class="delivery-estimate__form-field">
+          <input
+            type="text"
+            id="delivery-zip-{{ block.id }}"
+            class="delivery-estimate__form-input"
+            placeholder="Zip / Postal Code"
+            maxlength="10"
+          >
+        </div>
+        <button
+          type="button"
+          class="delivery-estimate__form-submit"
+          id="delivery-submit-{{ block.id }}"
+        >
+          Submit
+        </button>
+      </div>
+    </div>
+
+    <!-- Error State (hidden by default) -->
+    <div class="delivery-estimate__error delivery-estimate--hidden" id="delivery-error-{{ block.id }}">
+      <!-- Error message populated by JavaScript -->
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const blockId = '{{ block.id }}';
+    const container = document.getElementById(`delivery-estimate-${blockId}`);
+    const loading = document.getElementById(`delivery-loading-${blockId}`);
+    const main = document.getElementById(`delivery-main-${blockId}`);
+    const dateEl = document.getElementById(`delivery-date-${blockId}`);
+    const locationEl = document.getElementById(`delivery-location-${blockId}`);
+    const form = document.getElementById(`delivery-form-${blockId}`);
+    const zipInput = document.getElementById(`delivery-zip-${blockId}`);
+    const submitBtn = document.getElementById(`delivery-submit-${blockId}`);
+    const errorEl = document.getElementById(`delivery-error-${blockId}`);
+
+    const shop = container.dataset.shop;
+
+    const appUrl = '/apps/delivery'; 
+
+    function showLoading() {
+      loading.classList.remove('delivery-estimate--hidden');
+      main.classList.add('delivery-estimate--hidden');
+      errorEl.classList.add('delivery-estimate--hidden');
+    }
+
+    function showMain() {
+      loading.classList.add('delivery-estimate--hidden');
+      main.classList.remove('delivery-estimate--hidden');
+      errorEl.classList.add('delivery-estimate--hidden');
+    }
+
+    function showError(message) {
+      loading.classList.add('delivery-estimate--hidden');
+      main.classList.add('delivery-estimate--hidden');
+      errorEl.classList.remove('delivery-estimate--hidden');
+      errorEl.textContent = message || 'Unable to calculate delivery date';
+    }
+
+    function updateDisplay(data) {
+      if (!data.success) {
+        showError(data.error);
+        return;
+      }
+
+      dateEl.textContent = data.displayText;
+      locationEl.textContent = data.location;
+      showMain();
+    }
+
+    async function fetchEstimate(postalCode = null) {
+      showLoading();
+
+      try {
+        let url = `${appUrl}/api/delivery-estimate?shop=${encodeURIComponent(shop)}`;
+        if (postalCode) {
+          url += `&postalCode=${encodeURIComponent(postalCode)}`;
+        }
+
+        console.log('[Delivery Widget] Fetching estimate from:', url);
+        const response = await fetch(url);
+        const data = await response.json();
+        console.log('[Delivery Widget] Response:', data);
+        updateDisplay(data);
+      } catch (error) {
+        console.error('Delivery estimate error:', error);
+        showError();
+      }
+    }
+
+    // Toggle location change form
+    locationEl.addEventListener('click', function () {
+      const isVisible = form.classList.contains('is-visible');
+      form.classList.toggle('is-visible');
+      locationEl.setAttribute('aria-expanded', !isVisible);
+
+      if (!isVisible) {
+        zipInput.focus();
+      }
+    });
+
+    // Handle form submission
+    submitBtn.addEventListener('click', function () {
+      const zip = zipInput.value.trim();
+      if (zip) {
+        form.classList.remove('is-visible');
+        locationEl.setAttribute('aria-expanded', 'false');
+        fetchEstimate(zip);
+      }
+    });
+
+    // Handle enter key in zip input
+    zipInput.addEventListener('keypress', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitBtn.click();
+      }
+    });
+
+    // Initialize
+    fetchEstimate();
+  })();
+</script>
+
+{% schema %}
+{
+  "name": "Estimated Delivery Date",
+  "target": "section",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Appearance"
+    },
+    {
+      "type": "image_picker",
+      "id": "icon",
+      "label": "Icon"
+    },
+    {
+      "type": "header",
+      "content": "Text Settings"
+    },
+    {
+      "type": "text",
+      "id": "loading_text",
+      "label": "Loading Text",
+      "default": "Calculating delivery date..."
+    },
+    {
+      "type": "text",
+      "id": "deliver_to_text",
+      "label": "Deliver To Text",
+      "default": "Deliver to"
+    },
+    {
+      "type": "header",
+      "content": "Typography"
+    },
+    {
+      "type": "range",
+      "id": "font_size",
+      "label": "Font Size",
+      "min": 10,
+      "max": 16,
+      "step": 1,
+      "default": 14,
+      "unit": "px"
+    },
+    {
+      "type": "select",
+      "id": "font_weight",
+      "label": "Font Weight",
+      "options": [
+        { "value": "400", "label": "Normal" },
+        { "value": "500", "label": "Medium" },
+        { "value": "600", "label": "Semi-Bold" },
+        { "value": "700", "label": "Bold" }
+      ],
+      "default": "400"
+    },
+    {
+      "type": "select",
+      "id": "date_font_weight",
+      "label": "Delivery Date Font Weight",
+      "options": [
+        { "value": "400", "label": "Normal" },
+        { "value": "500", "label": "Medium" },
+        { "value": "600", "label": "Semi-Bold" },
+        { "value": "700", "label": "Bold" }
+      ],
+      "default": "600"
+    },
+    {
+      "type": "header",
+      "content": "Colors"
+    },
+    {
+      "type": "color",
+      "id": "background_color",
+      "label": "Background Color",
+      "default": "#f5f5f5"
+    },
+    {
+      "type": "color",
+      "id": "border_color",
+      "label": "Border Color",
+      "default": "#dddddd"
+    },
+    {
+      "type": "range",
+      "id": "border_radius",
+      "label": "Border Radius",
+      "min": 0,
+      "max": 16,
+      "step": 1,
+      "default": 4,
+      "unit": "px"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text Color",
+      "default": "#666666"
+    },
+    {
+      "type": "color",
+      "id": "location_link_color",
+      "label": "Location Link Color",
+      "default": "#0000ee"
+    },
+    {
+      "type": "color",
+      "id": "location_link_hover_color",
+      "label": "Location Link Hover Color",
+      "default": "#551a8b"
+    },
+    {
+      "type": "color",
+      "id": "button_background",
+      "label": "Button Background",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "button_color",
+      "label": "Button Text Color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "header",
+      "content": "Spacing"
+    },
+    {
+      "type": "range",
+      "id": "vertical_padding",
+      "label": "Vertical Padding",
+      "min": 0,
+      "max": 24,
+      "step": 4,
+      "default": 16,
+      "unit": "px"
+    },
+    {
+      "type": "range",
+      "id": "horizontal_padding",
+      "label": "Horizontal Padding",
+      "min": 0,
+      "max": 24,
+      "step": 4,
+      "default": 16,
+      "unit": "px"
+    },
+    {
+      "type": "range",
+      "id": "margin",
+      "label": "Vertical Margin",
+      "min": 0,
+      "max": 24,
+      "step": 4,
+      "default": 16,
+      "unit": "px"
+    }
+  ]
+}
+{% endschema %}
