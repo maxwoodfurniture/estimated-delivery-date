@@ -1,5 +1,5 @@
 {
-  "name": "estimated-delivery-date",
+  "name": "pdp-estimated-delivery-date",
   "private": true,
   "scripts": {
     "build": "react-router build",
@@ -68,5 +68,5 @@
   "overrides": {
     "p-map": "^4.0.0"
   },
-  "author": "idudderar"
+  "author": "JSchierer"
 }
