@@ -2,12 +2,11 @@
 
 client_id = "85c04766326db3f18392c9ee00add46b"
 name = "estimated-delivery-date"
-application_url = "https://example.com"
+application_url = "https://estimated-delivery-date.onrender.com"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-04"
@@ -25,4 +24,8 @@ uri = "/webhooks/app/scopes_update"
 scopes = ""
 
 [auth]
-redirect_urls = ["https://example.com/api/auth"]
+redirect_urls = [
+  "https://estimated-delivery-date.onrender.com/auth/callback",
+  "https://estimated-delivery-date.onrender.com/auth/shopify/callback",
+  "https://estimated-delivery-date.onrender.com/api/auth/callback",
+]
