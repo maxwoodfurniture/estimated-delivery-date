@@ -261,8 +261,11 @@
 
     const shop = container.dataset.shop;
 
+    // TEMPORARY: Direct API call (bypassing app proxy for local dev)
+    // Replace with your tunnel URL from 'npm run dev'
+    // const appUrl = 'https://race-lance-driver-kings.trycloudflare.com'; 
     const appUrl = '/apps/delivery'; 
-
+    
     function showLoading() {
       loading.classList.remove('delivery-estimate--hidden');
       main.classList.add('delivery-estimate--hidden');
