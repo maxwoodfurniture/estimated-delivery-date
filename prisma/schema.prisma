@@ -14,21 +14,51 @@ datasource db {
 }
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+// App settings for each shop
+model AppSettings {
+  id   String @id @default(cuid())
+  shop String @unique
+
+  // Warehouse/Origin Address
+  warehouseStreet      String?
+  warehouseCity        String
+  warehouseState       String
+  warehousePostalCode  String
+  warehouseCountryCode String  @default("US")
+
+  // Handling/Processing Time
+  handlingTimeDays Int    @default(1)
+  processingDays   String @default("1,2,3,4,5") // Comma-separated day numbers: 0=Sun, 1=Mon, etc
+  cutoffTime       String @default("14:00") // 24hr format, orders after this ship next day
+
+  // Carrier API Credentials (encrypted in production)
+  fedexApiKey        String?
+  fedexSecretKey     String?
+  fedexAccountNumber String?
+
+  // Feature flags
+  isEnabled      Boolean @default(true)
+  showExactDates Boolean @default(true) // Show "Feb 10-12" vs "3-5 business days"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
