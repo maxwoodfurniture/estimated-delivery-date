@@ -22,6 +22,7 @@ export class BaseCarrier {
    * @param {import('./types.js').TransitTimeRequest} request
    * @returns {Promise<import('./types.js').TransitTimeResponse>}
    */
+  // eslint-disable-next-line no-unused-vars
   async getTransitTime(request) {
     throw new Error("getTransitTime must be implemented by subclass");
   }

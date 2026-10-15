@@ -6,25 +6,25 @@
 import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { getAppSettings } from "../services/delivery-estimate.js";
+import {
+  getAppSettings,
+  hasCarrierCredentials,
+} from "../services/settings.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const settings = await getAppSettings(session.shop);
 
-  // Determine setup status
+  // FedEx credentials are optional: without them the widget uses zone estimates.
   const hasWarehouse = !!(
     settings?.warehouseCity && settings?.warehousePostalCode
   );
-  const hasCredentials = !!(settings?.fedexApiKey && settings?.fedexSecretKey);
-  const isEnabled = settings?.isEnabled ?? false;
 
   return {
-    shop: session.shop,
     hasWarehouse,
-    hasCredentials,
-    isEnabled,
-    isConfigured: hasWarehouse && hasCredentials,
+    hasCredentials: hasCarrierCredentials(settings),
+    isEnabled: settings?.isEnabled ?? false,
+    isConfigured: hasWarehouse,
   };
 };
 
@@ -40,12 +40,12 @@ export default function Index() {
 
       {/* Status Banner */}
       {isConfigured && isEnabled ? (
-        <s-banner status="success">
+        <s-banner tone="success">
           Your delivery estimate widget is active and will appear on product
           pages.
         </s-banner>
       ) : (
-        <s-banner status="warning">
+        <s-banner tone="warning">
           Complete the setup below to enable delivery estimates on your product
           pages.
         </s-banner>
@@ -81,7 +81,9 @@ export default function Index() {
             <s-stack direction="inline" gap="base" align="center">
               <s-text>{hasCredentials ? "✅" : "⬜"}</s-text>
               <s-stack direction="block" gap="tight">
-                <s-text fontWeight="bold">Add FedEx API Credentials</s-text>
+                <s-text fontWeight="bold">
+                  Add FedEx API Credentials (Optional)
+                </s-text>
                 <s-text variant="subdued">
                   Connect your FedEx developer account for real-time transit
                   estimates
@@ -140,15 +142,15 @@ export default function Index() {
           <s-paragraph>
             <s-text fontWeight="bold">1. Automatic Location Detection</s-text>
             <br />
-            We detect your customer's location using their IP address - no
-            permissions required.
+            We detect your customer&apos;s location from their IP address. If
+            we can&apos;t, the widget asks for a ZIP code.
           </s-paragraph>
 
           <s-paragraph>
             <s-text fontWeight="bold">2. Real-Time Transit Calculation</s-text>
             <br />
             FedEx Ground transit times are calculated from your warehouse to the
-            customer's location.
+            customer&apos;s location, with a ZIP-zone estimate as fallback.
           </s-paragraph>
 
           <s-paragraph>

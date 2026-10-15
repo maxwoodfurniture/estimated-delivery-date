@@ -1,8 +1,10 @@
 /**
- * Carrier service factory
- * Creates carrier instances based on carrier type
+ * Carrier service factory.
+ * Carrier instances are cached per shop so OAuth tokens survive between
+ * requests. A credential change produces a new instance.
  */
 
+import { createHash } from "node:crypto";
 import { FedExCarrier } from "./fedex-carrier.js";
 import { CARRIERS } from "./types.js";
 
@@ -10,34 +12,55 @@ export { CARRIERS, FEDEX_SERVICE_TYPES } from "./types.js";
 export { FedExCarrier } from "./fedex-carrier.js";
 export { BaseCarrier } from "./base-carrier.js";
 
-/**
- * Create a carrier instance based on carrier type
- * @param {string} carrierType - Carrier type from CARRIERS enum
- * @param {import('./types.js').CarrierCredentials} credentials - Carrier API credentials
- * @param {boolean} useSandbox - Whether to use sandbox/test environment
- * @returns {import('./base-carrier.js').BaseCarrier}
- */
-export function createCarrier(carrierType, credentials, useSandbox = false) {
-  switch (carrierType) {
-    case CARRIERS.FEDEX:
-      return new FedExCarrier(credentials, useSandbox);
+const CARRIER_CLASSES = {
+  [CARRIERS.FEDEX]: FedExCarrier,
+};
 
-    // Future carriers can be added here:
-    // case CARRIERS.UPS:
-    //   return new UPSCarrier(credentials, useSandbox);
-    // case CARRIERS.USPS:
-    //   return new USPSCarrier(credentials, useSandbox);
+/** @type {Map<string, {fingerprint: string, carrier: import('./base-carrier.js').BaseCarrier}>} */
+const carrierInstances = new Map();
 
-    default:
-      throw new Error(`Unsupported carrier: ${carrierType}`);
-  }
+function fingerprintCredentials(credentials, useSandbox) {
+  return createHash("sha256")
+    .update(JSON.stringify({ ...credentials, useSandbox }))
+    .digest("hex");
 }
 
 /**
- * Get list of supported carriers
- * @returns {string[]}
+ * Create a carrier instance based on carrier type.
+ * @param {string} carrierType - Value from CARRIERS
+ * @param {import('./types.js').CarrierCredentials} credentials
+ * @param {boolean} useSandbox
  */
-export function getSupportedCarriers() {
-  return [CARRIERS.FEDEX];
-  // When more carriers are added: return Object.values(CARRIERS);
+export function createCarrier(carrierType, credentials, useSandbox = false) {
+  const CarrierClass = CARRIER_CLASSES[carrierType];
+  if (!CarrierClass) {
+    throw new Error(`Unsupported carrier: ${carrierType}`);
+  }
+  return new CarrierClass(credentials, useSandbox);
+}
+
+/**
+ * Reuse one carrier instance per shop and carrier while credentials match.
+ */
+export function getCarrierForShop(
+  shop,
+  carrierType,
+  credentials,
+  useSandbox = false,
+) {
+  const key = `${shop}:${carrierType}`;
+  const fingerprint = fingerprintCredentials(credentials, useSandbox);
+  const existing = carrierInstances.get(key);
+  if (existing?.fingerprint === fingerprint) return existing.carrier;
+
+  const carrier = createCarrier(carrierType, credentials, useSandbox);
+  carrierInstances.set(key, { fingerprint, carrier });
+  return carrier;
+}
+
+/** Drop cached carriers for a shop, e.g. after uninstall. */
+export function forgetCarriersForShop(shop) {
+  for (const key of carrierInstances.keys()) {
+    if (key.startsWith(`${shop}:`)) carrierInstances.delete(key);
+  }
 }

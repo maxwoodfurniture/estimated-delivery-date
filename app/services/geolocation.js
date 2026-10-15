@@ -1,272 +1,161 @@
 /**
- * Geolocation service for automatically determining user location
- * Uses public IP-based geolocation APIs - no browser permissions required
- *
- * This service provides fallback mechanisms to ensure reliable location detection
+ * Geolocation service.
+ * Resolves a shopper's location from their IP address or a US ZIP code.
+ * Results are cached in memory (see cache.server.js).
  */
+
+import deliveryConfig from "../config/delivery.json";
+import { ipLocationCache, postalCodeLocationCache } from "./cache.server.js";
+import { isPrivateIP, normalizeIP } from "./ip-address.js";
 
 /**
  * @typedef {Object} GeoLocation
- * @property {string} city - City name
- * @property {string} region - State/Province code
- * @property {string} postalCode - Postal/ZIP code
+ * @property {string} city
+ * @property {string} region - State code or name
+ * @property {string} postalCode
  * @property {string} countryCode - ISO country code
- * @property {number} [latitude] - Latitude
- * @property {number} [longitude] - Longitude
  * @property {string} source - Which service provided the data
  */
 
-// List of free geolocation APIs to try (in order of preference)
+const US_ZIP_PATTERN = /^(\d{5})(?:-?\d{4})?$/;
+
+// Client IP headers, most trusted first.
+const CLIENT_IP_HEADERS = [
+  "cf-connecting-ip",
+  "true-client-ip",
+  "x-real-ip",
+  "x-forwarded-for",
+  "x-client-ip",
+  "x-cluster-client-ip",
+];
+
+// HTTPS providers that allow commercial use. Set IPINFO_TOKEN for higher limits.
 const GEOLOCATION_SERVICES = [
   {
-    name: "ip-api",
-    url: (ip) =>
-      `http://ip-api.com/json/${ip || ""}?fields=status,city,region,zip,countryCode,lat,lon`,
-    parse: (data) => {
-      if (data.status !== "success") return null;
-      return {
-        city: data.city,
-        region: data.region,
-        postalCode: data.zip,
-        countryCode: data.countryCode,
-        latitude: data.lat,
-        longitude: data.lon,
-      };
-    },
-  },
-  {
     name: "ipapi.co",
-    url: (ip) => `https://ipapi.co/${ip || "json"}/json/`,
-    parse: (data) => {
-      if (data.error) return null;
-      return {
-        city: data.city,
-        region: data.region_code,
-        postalCode: data.postal,
-        countryCode: data.country_code,
-        latitude: data.latitude,
-        longitude: data.longitude,
-      };
-    },
+    url: (ip) => `https://ipapi.co/${ip}/json/`,
+    parse: (data) =>
+      data.error
+        ? null
+        : {
+            city: data.city,
+            region: data.region_code,
+            postalCode: data.postal,
+            countryCode: data.country_code,
+          },
   },
   {
     name: "ipinfo.io",
-    url: (ip) => `https://ipinfo.io/${ip || ""}/json`,
-    parse: (data) => {
-      if (!data.city) return null;
-      const [lat, lon] = (data.loc || "").split(",").map(Number);
-      return {
-        city: data.city,
-        region: data.region,
-        postalCode: data.postal,
-        countryCode: data.country,
-        latitude: lat || undefined,
-        longitude: lon || undefined,
-      };
+    url: (ip) => {
+      const token = process.env.IPINFO_TOKEN;
+      return `https://ipinfo.io/${ip}/json${token ? `?token=${token}` : ""}`;
     },
+    parse: (data) =>
+      data.bogon || !data.city
+        ? null
+        : {
+            city: data.city,
+            region: data.region,
+            postalCode: data.postal,
+            countryCode: data.country,
+          },
   },
 ];
 
+async function fetchJson(url, timeoutMilliseconds) {
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMilliseconds),
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 /**
- * Get location from IP address using public geolocation APIs
- * Tries multiple services with fallback
- *
- * @param {string} [ipAddress] - IP address to geolocate (uses requester's IP if not provided)
+ * Look up a public IP address. Returns null for missing or private IPs,
+ * because providers would otherwise geolocate the server itself.
+ * @param {string|null} ipAddress
  * @returns {Promise<GeoLocation|null>}
  */
 export async function getLocationFromIP(ipAddress) {
-  // Clean up the IP address (handle IPv6-mapped IPv4, proxied IPs, etc.)
-  const cleanIP = cleanIPAddress(ipAddress);
+  const ip = normalizeIP(ipAddress);
+  if (isPrivateIP(ip)) return null;
+
+  const cached = ipLocationCache.get(ip);
+  if (cached !== undefined) return cached;
 
   for (const service of GEOLOCATION_SERVICES) {
     try {
-      const response = await fetch(service.url(cleanIP), {
-        headers: {
-          Accept: "application/json",
-        },
-        // Timeout after 3 seconds per service
-        signal: AbortSignal.timeout(3000),
-      });
-
-      if (!response.ok) {
-        console.warn(
-          `Geolocation service ${service.name} returned ${response.status}`,
-        );
-        continue;
-      }
-
-      const data = await response.json();
+      const data = await fetchJson(
+        service.url(encodeURIComponent(ip)),
+        deliveryConfig.timeoutsMs.geolocation,
+      );
       const location = service.parse(data);
-
-      if (location && location.postalCode) {
-        return {
-          ...location,
-          source: service.name,
-        };
+      if (location?.postalCode) {
+        const result = { ...location, source: service.name };
+        ipLocationCache.set(ip, result);
+        return result;
       }
     } catch (error) {
-      console.warn(
-        `Geolocation service ${service.name} failed:`,
-        error.message,
-      );
-      continue;
+      console.warn(`[Geolocation] ${service.name} failed: ${error.message}`);
     }
   }
 
-  console.error("All geolocation services failed");
   return null;
 }
 
 /**
- * Clean up IP address for geolocation lookup
- * Handles various IP formats from different proxy/CDN setups
- */
-function cleanIPAddress(ip) {
-  if (!ip) return "";
-
-  // Handle comma-separated IPs (from X-Forwarded-For)
-  if (ip.includes(",")) {
-    ip = ip.split(",")[0].trim();
-  }
-
-  // Handle IPv6-mapped IPv4 (::ffff:192.168.1.1)
-  if (ip.startsWith("::ffff:")) {
-    ip = ip.substring(7);
-  }
-
-  // Don't look up localhost/private IPs
-  if (isPrivateIP(ip)) {
-    return "";
-  }
-
-  return ip;
-}
-
-/**
- * Check if an IP is private/local (can't be geolocated)
- */
-function isPrivateIP(ip) {
-  if (!ip) return true;
-
-  // IPv4 private ranges
-  if (
-    ip.startsWith("10.") ||
-    ip.startsWith("192.168.") ||
-    ip.startsWith("172.16.") ||
-    ip.startsWith("172.17.") ||
-    ip.startsWith("172.18.") ||
-    ip.startsWith("172.19.") ||
-    ip.startsWith("172.2") ||
-    ip.startsWith("172.30.") ||
-    ip.startsWith("172.31.") ||
-    ip === "127.0.0.1" ||
-    ip === "localhost" ||
-    ip === "::1"
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Get client IP from request headers
- * Handles various proxy/CDN setups (Cloudflare, nginx, etc.)
- *
- * @param {Request} request - The incoming request
+ * Best-guess client IP from proxy/CDN headers.
+ * @param {Request} request
  * @returns {string|null}
  */
 export function getClientIP(request) {
-  const headers = request.headers;
-
-  // Try different headers in order of reliability
-  const ipHeaders = [
-    "cf-connecting-ip", // Cloudflare
-    "x-real-ip", // nginx
-    "x-forwarded-for", // Standard proxy header
-    "x-client-ip", // Various proxies
-    "true-client-ip", // Akamai
-    "x-cluster-client-ip", // Various load balancers
-  ];
-
-  for (const header of ipHeaders) {
-    const value = headers.get(header);
-    if (value) {
-      // X-Forwarded-For may contain multiple IPs, take the first
-      const ip = value.split(",")[0].trim();
-      if (ip && !isPrivateIP(ip)) {
-        return ip;
-      }
-    }
+  for (const header of CLIENT_IP_HEADERS) {
+    const ip = normalizeIP(request.headers.get(header));
+    if (ip && !isPrivateIP(ip)) return ip;
   }
-
   return null;
 }
 
 /**
- * Get a default fallback location (used when geolocation fails)
- * Defaults to a central US location
- *
- * @returns {GeoLocation}
+ * Normalize "29401", "29401-1234" or "294011234" to five digits.
+ * @returns {string|null}
  */
-export function getDefaultLocation() {
-  return {
-    city: "Kansas City",
-    region: "MO",
-    postalCode: "64106",
-    countryCode: "US",
-    source: "default",
-  };
+export function normalizeUsPostalCode(value) {
+  const match = US_ZIP_PATTERN.exec((value ?? "").trim());
+  return match ? match[1] : null;
 }
 
 /**
- * Look up city and state from a US postal code
- * Uses the free ZipCodeAPI service
- *
- * @param {string} postalCode - US ZIP code
+ * Look up city and state for a US ZIP code (zippopotam.us, no key needed).
+ * @param {string} postalCode - Five-digit ZIP
  * @returns {Promise<GeoLocation|null>}
  */
 export async function getLocationFromPostalCode(postalCode) {
-  if (!postalCode) return null;
-
-  // Clean the postal code (remove spaces, dashes, etc.)
-  const cleanZip = postalCode.replace(/[^0-9]/g, "").substring(0, 5);
-
-  if (cleanZip.length !== 5) {
-    console.warn(`Invalid postal code format: ${postalCode}`);
-    return null;
-  }
+  const cached = postalCodeLocationCache.get(postalCode);
+  if (cached !== undefined) return cached;
 
   try {
-    // Try zippopotam.us (free, no API key required)
-    const response = await fetch(`https://api.zippopotam.us/us/${cleanZip}`, {
-      signal: AbortSignal.timeout(3000),
-    });
+    const data = await fetchJson(
+      `https://api.zippopotam.us/us/${postalCode}`,
+      deliveryConfig.timeoutsMs.postalCodeLookup,
+    );
+    const place = data.places?.[0];
+    if (!place) return null;
 
-    if (!response.ok) {
-      console.warn(`Postal code lookup failed with status ${response.status}`);
-      return null;
-    }
-
-    const data = await response.json();
-
-    if (!data.places || data.places.length === 0) {
-      return null;
-    }
-
-    const place = data.places[0];
-
-    return {
+    const result = {
       city: place["place name"],
       region: place["state abbreviation"],
-      postalCode: cleanZip,
+      postalCode,
       countryCode: data["country abbreviation"],
-      latitude: parseFloat(place.latitude),
-      longitude: parseFloat(place.longitude),
-      source: "postal-code-lookup",
+      source: "zippopotam.us",
     };
+    postalCodeLocationCache.set(postalCode, result);
+    return result;
   } catch (error) {
-    console.warn(`Postal code lookup failed for ${cleanZip}:`, error.message);
+    console.warn(`[Geolocation] ZIP lookup failed: ${error.message}`);
     return null;
   }
 }

@@ -1,14 +1,10 @@
 {
-  "locales": {
-    "en": {
-      "delivery_estimate": {
-        "loading": "Calculating delivery date...",
-        "deliver_to": "Deliver to",
-        "change_location": "Change location",
-        "zip_label": "ZIP / Postal Code",
-        "update": "Update",
-        "error": "Unable to calculate delivery date"
-      }
-    }
+  "delivery_estimate": {
+    "change_location": "Change delivery location",
+    "zip_label": "ZIP code",
+    "zip_prompt": "Enter your ZIP code to see a delivery date",
+    "invalid_zip": "Enter a valid 5-digit ZIP code",
+    "update": "Update",
+    "error": "Unable to calculate delivery date"
   }
 }
