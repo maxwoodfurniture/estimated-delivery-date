@@ -9,8 +9,8 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -44,13 +44,14 @@ model AppSettings {
   warehouseState       String
   warehousePostalCode  String
   warehouseCountryCode String  @default("US")
+  warehouseTimezone    String  @default("America/New_York") // IANA name, used for cutoff time
 
   // Handling/Processing Time
   handlingTimeDays Int    @default(1)
   processingDays   String @default("1,2,3,4,5") // Comma-separated day numbers: 0=Sun, 1=Mon, etc
   cutoffTime       String @default("14:00") // 24hr format, orders after this ship next day
 
-  // Carrier API Credentials (encrypted in production)
+  // Carrier API Credentials. Stored in plain text; see TECH_DEBT.md.
   fedexApiKey        String?
   fedexSecretKey     String?
   fedexAccountNumber String?

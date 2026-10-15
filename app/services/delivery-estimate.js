@@ -1,85 +1,83 @@
 /**
  * Delivery Estimate Service
- * Combines carrier services, geolocation, and app settings to provide delivery estimates
+ * Combines shop settings, shopper location and carrier transit time into a
+ * delivery window for the storefront widget.
  */
 
-import prisma from "../db.server.js";
+import deliveryConfig from "../config/delivery.json";
+import { carrierTransitCache } from "./cache.server.js";
 import {
-  createCarrier,
   CARRIERS,
   FEDEX_SERVICE_TYPES,
+  getCarrierForShop,
 } from "./carriers/index.js";
 import {
+  addBusinessDays,
+  addDays,
+  businessDaysBetween,
+  formatDateRange,
+  getZonedNow,
+  nextWorkingDay,
+  parseTimeToMinutes,
+  toIsoDate,
+} from "./dates.js";
+import {
   getLocationFromIP,
-  getDefaultLocation,
   getLocationFromPostalCode,
+  normalizeUsPostalCode,
 } from "./geolocation.js";
+import {
+  getAppSettings,
+  hasCarrierCredentials,
+  parseProcessingDays,
+} from "./settings.server.js";
+
+/** Result codes. The storefront widget mirrors these. */
+export const ESTIMATE_CODES = {
+  OK: "OK",
+  DISABLED: "DISABLED",
+  NOT_CONFIGURED: "NOT_CONFIGURED",
+  NEEDS_POSTAL_CODE: "NEEDS_POSTAL_CODE",
+  INVALID_POSTAL_CODE: "INVALID_POSTAL_CODE",
+  ERROR: "ERROR",
+};
+
+export const ESTIMATE_HTTP_STATUS = {
+  [ESTIMATE_CODES.OK]: 200,
+  [ESTIMATE_CODES.NEEDS_POSTAL_CODE]: 200,
+  [ESTIMATE_CODES.INVALID_POSTAL_CODE]: 400,
+  [ESTIMATE_CODES.DISABLED]: 404,
+  [ESTIMATE_CODES.NOT_CONFIGURED]: 404,
+  [ESTIMATE_CODES.ERROR]: 500,
+};
+
+const SUPPORTED_DESTINATION_COUNTRY = "US";
+const SECTIONAL_CENTER_DIGITS = 3;
+const { deliveryWindow, fallbackZones, displayLocale } = deliveryConfig;
+
+const isFedExSandboxEnabled = () => process.env.FEDEX_USE_SANDBOX === "true";
+
+function failure(code, error) {
+  return { success: false, code, error };
+}
 
 /**
- * @typedef {Object} DeliveryEstimate
- * @property {boolean} success - Whether the estimate was successful
- * @property {string} [error] - Error message if unsuccessful
- * @property {string} [deliveryDateMin] - Earliest delivery date (formatted string)
- * @property {string} [deliveryDateMax] - Latest delivery date (formatted string)
- * @property {string} [displayText] - Human-readable delivery text (e.g., "Arrives Feb 10 - Feb 12")
- * @property {string} [location] - Destination location text (e.g., "Summerville, United States")
- * @property {number} [transitDays] - Estimated transit days
+ * @param {{ shop: string, clientIP?: string|null, postalCode?: string|null }} request
  */
-
-/**
- * Get delivery estimate for a shop and customer IP
- *
- * @param {string} shop - Shopify shop domain
- * @param {string} [customerIP] - Customer's IP address for geolocation
- * @param {string} [postalCode] - Override postal code (if customer provided one)
- * @returns {Promise<DeliveryEstimate>}
- */
-export async function getDeliveryEstimate(shop, customerIP, postalCode) {
+export async function getDeliveryEstimate({ shop, clientIP, postalCode }) {
   try {
-    // Get app settings for this shop
     const settings = await getAppSettings(shop);
-
-    if (!settings) {
-      return {
-        success: false,
-        error: "App not configured for this shop",
-      };
+    if (!settings?.warehousePostalCode) {
+      return failure(ESTIMATE_CODES.NOT_CONFIGURED, "App not configured");
     }
-
     if (!settings.isEnabled) {
-      return {
-        success: false,
-        error: "Delivery estimates are disabled",
-      };
+      return failure(ESTIMATE_CODES.DISABLED, "Delivery estimates are disabled");
     }
 
-    // Get customer location
-    let destination;
-    if (postalCode) {
-      // Look up city and state from postal code
-      destination = await getLocationFromPostalCode(postalCode);
+    const destinationResult = await resolveDestination(clientIP, postalCode);
+    if (!destinationResult.success) return destinationResult;
+    const { destination } = destinationResult;
 
-      if (!destination) {
-        // If lookup fails, use just the postal code
-        console.warn(
-          `Could not resolve location for postal code: ${postalCode}`,
-        );
-        destination = {
-          postalCode,
-          city: "",
-          region: "",
-          countryCode: "US",
-        };
-      }
-    } else {
-      // Geolocate from IP
-      destination = await getLocationFromIP(customerIP);
-      if (!destination) {
-        destination = getDefaultLocation();
-      }
-    }
-
-    // Build origin from warehouse settings
     const origin = {
       street: settings.warehouseStreet || undefined,
       city: settings.warehouseCity,
@@ -87,290 +85,178 @@ export async function getDeliveryEstimate(shop, customerIP, postalCode) {
       postalCode: settings.warehousePostalCode,
       countryCode: settings.warehouseCountryCode,
     };
+    const shipDate = calculateShipDate(settings);
 
-    // Calculate ship date based on handling time, cutoff, and processing days
-    const shipDate = calculateShipDate(
-      settings.handlingTimeDays,
-      settings.cutoffTime,
-      settings.processingDays,
-    );
+    const transit =
+      (await getCarrierTransit(shop, settings, origin, destination, shipDate)) ??
+      estimateFallbackTransit(origin, destination, shipDate);
 
-    // Only try FedEx API if credentials are configured
-    let transitResult = null;
+    return buildEstimate(transit, destination, shipDate, settings);
+  } catch (error) {
+    console.error("[Delivery Estimate] Unexpected error:", error);
+    return failure(ESTIMATE_CODES.ERROR, "Failed to calculate delivery estimate");
+  }
+}
 
-    if (
-      settings.fedexApiKey &&
-      settings.fedexSecretKey &&
-      settings.fedexAccountNumber
-    ) {
-      try {
-        console.log("[Delivery Estimate] Using FedEx API (sandbox mode)");
-
-        // Create carrier and get transit time (use sandbox by default for testing)
-        const carrier = createCarrier(
-          CARRIERS.FEDEX,
-          {
-            apiKey: settings.fedexApiKey,
-            secretKey: settings.fedexSecretKey,
-            accountNumber: settings.fedexAccountNumber,
-          },
-          true,
-        ); // Use sandbox mode
-
-        transitResult = await carrier.getTransitTime({
-          origin,
-          destination: {
-            city: destination.city,
-            state: destination.region,
-            postalCode: destination.postalCode,
-            countryCode: destination.countryCode,
-          },
-          shipDate,
-          serviceType: FEDEX_SERVICE_TYPES.GROUND,
-        });
-
-        if (transitResult.success) {
-          console.log("[Delivery Estimate] FedEx API succeeded:", {
-            transitDays: transitResult.transitDays,
-            deliveryDate: transitResult.deliveryDateMin,
-          });
-        }
-      } catch (error) {
-        console.warn(
-          "[Delivery Estimate] FedEx API error, using fallback:",
-          error.message,
-        );
-        transitResult = { success: false };
-      }
-    } else {
-      console.log(
-        "[Delivery Estimate] FedEx credentials not configured, using fallback",
+async function resolveDestination(clientIP, postalCode) {
+  if (postalCode) {
+    const zip = normalizeUsPostalCode(postalCode);
+    if (!zip) {
+      return failure(
+        ESTIMATE_CODES.INVALID_POSTAL_CODE,
+        "Enter a valid 5-digit ZIP code",
       );
     }
-
-    if (!transitResult || !transitResult.success) {
-      // Try fallback estimate based on distance zones
-      console.log("[Delivery Estimate] Using fallback zone-based estimation");
-      return generateFallbackEstimate(origin, destination, shipDate, settings);
-    }
-
-    // Format the response
-    const locationText = formatLocation(destination);
-    const dateText = settings.showExactDates
-      ? formatDateRange(
-          transitResult.deliveryDateMin,
-          transitResult.deliveryDateMax,
-        )
-      : formatTransitDays(transitResult.transitDays);
-
-    return {
-      success: true,
-      deliveryDateMin: transitResult.deliveryDateMin?.toISOString(),
-      deliveryDateMax: transitResult.deliveryDateMax?.toISOString(),
-      displayText: `Arrives ${dateText}`,
-      location: locationText,
-      transitDays: transitResult.transitDays,
+    const destination = (await getLocationFromPostalCode(zip)) ?? {
+      city: "",
+      region: "",
+      postalCode: zip,
+      countryCode: SUPPORTED_DESTINATION_COUNTRY,
     };
-  } catch (error) {
-    console.error("Error getting delivery estimate:", error);
-    return {
-      success: false,
-      error: "Failed to calculate delivery estimate",
-    };
+    return { success: true, destination };
   }
+
+  // No guessing: without a usable location, ask the shopper for a ZIP.
+  const destination = await getLocationFromIP(clientIP);
+  if (destination?.countryCode !== SUPPORTED_DESTINATION_COUNTRY) {
+    return failure(ESTIMATE_CODES.NEEDS_POSTAL_CODE, "Enter your ZIP code");
+  }
+  return { success: true, destination };
 }
 
 /**
- * Get app settings for a shop
- * @param {string} shop - Shop domain
+ * Ship date in the warehouse's timezone, honoring cutoff, processing days and
+ * handling time. Exported for tests.
  */
-export async function getAppSettings(shop) {
-  return await prisma.appSettings.findUnique({
-    where: { shop },
-  });
+export function calculateShipDate(settings, now = new Date()) {
+  const processingDays = parseProcessingDays(settings.processingDays);
+  const timeZone =
+    settings.warehouseTimezone || deliveryConfig.defaults.warehouseTimezone;
+  const cutoffMinutes =
+    parseTimeToMinutes(settings.cutoffTime) ??
+    parseTimeToMinutes(deliveryConfig.defaults.cutoffTime);
+
+  const { date: today, minutesSinceMidnight } = getZonedNow(timeZone, now);
+  const firstPossibleDay =
+    minutesSinceMidnight >= cutoffMinutes ? addDays(today, 1) : today;
+
+  return addBusinessDays(
+    nextWorkingDay(firstPossibleDay, processingDays),
+    settings.handlingTimeDays,
+    processingDays,
+  );
 }
 
-/**
- * Save app settings for a shop
- * @param {string} shop - Shop domain
- * @param {Object} data - Settings data
- */
-export async function saveAppSettings(shop, data) {
-  return await prisma.appSettings.upsert({
-    where: { shop },
-    update: {
-      ...data,
-      updatedAt: new Date(),
+async function getCarrierTransit(shop, settings, origin, destination, shipDate) {
+  if (!hasCarrierCredentials(settings)) return null;
+
+  const useSandbox = isFedExSandboxEnabled();
+  const cacheKey = [
+    shop,
+    CARRIERS.FEDEX,
+    useSandbox,
+    origin.postalCode,
+    destination.postalCode,
+    toIsoDate(shipDate),
+  ].join("|");
+
+  const cached = carrierTransitCache.get(cacheKey);
+  if (cached) return cached;
+
+  const carrier = getCarrierForShop(
+    shop,
+    CARRIERS.FEDEX,
+    {
+      apiKey: settings.fedexApiKey,
+      secretKey: settings.fedexSecretKey,
+      accountNumber: settings.fedexAccountNumber,
     },
-    create: {
-      shop,
-      ...data,
+    useSandbox,
+  );
+
+  const result = await carrier.getTransitTime({
+    origin,
+    destination: {
+      city: destination.city,
+      state: destination.region,
+      postalCode: destination.postalCode,
+      countryCode: destination.countryCode,
     },
+    shipDate,
+    serviceType: FEDEX_SERVICE_TYPES.GROUND,
   });
+
+  if (!result.success) {
+    console.warn(`[Delivery Estimate] FedEx fallback: ${result.error}`);
+    return null;
+  }
+
+  carrierTransitCache.set(cacheKey, result);
+  return result;
 }
 
-/**
- * Calculate the ship date based on handling time, cutoff, and processing days
- */
-function calculateShipDate(
-  handlingDays,
-  cutoffTime,
-  processingDaysStr = "1,2,3,4,5",
-) {
-  // Parse processing days (0=Sun, 1=Mon, ..., 6=Sat)
-  const processingDays = processingDaysStr
-    .split(",")
-    .map((d) => parseInt(d, 10))
-    .filter((d) => !isNaN(d) && d >= 0 && d <= 6);
-
-  // Default to Mon-Fri if empty
-  if (processingDays.length === 0) {
-    processingDays.push(1, 2, 3, 4, 5);
+/** Rough US zone estimate from the first three ZIP digits. */
+export function estimateTransitDaysByZone(originZip, destinationZip) {
+  const originCenter = Number.parseInt(
+    String(originZip ?? "").slice(0, SECTIONAL_CENTER_DIGITS),
+    10,
+  );
+  const destinationCenter = Number.parseInt(
+    String(destinationZip ?? "").slice(0, SECTIONAL_CENTER_DIGITS),
+    10,
+  );
+  if (Number.isNaN(originCenter) || Number.isNaN(destinationCenter)) {
+    return fallbackZones.unknownTransitDays;
   }
 
-  const now = new Date();
-  const [cutoffHour, cutoffMinute] = cutoffTime.split(":").map(Number);
-
-  // Create cutoff time for today
-  const cutoff = new Date(now);
-  cutoff.setHours(cutoffHour, cutoffMinute, 0, 0);
-
-  // Start with today's date
-  let shipDate = new Date(now);
-
-  // If we're past cutoff, start from tomorrow
-  if (now >= cutoff) {
-    shipDate.setDate(shipDate.getDate() + 1);
-  }
-
-  // Move to next processing day if current day is not a processing day
-  while (!processingDays.includes(shipDate.getDay())) {
-    shipDate.setDate(shipDate.getDate() + 1);
-  }
-
-  // Add handling days (only count processing days)
-  let daysAdded = 0;
-  while (daysAdded < handlingDays) {
-    shipDate.setDate(shipDate.getDate() + 1);
-    // Only count processing days
-    if (processingDays.includes(shipDate.getDay())) {
-      daysAdded++;
-    }
-  }
-
-  // If ship date falls on non-processing day, move to next processing day
-  while (!processingDays.includes(shipDate.getDay())) {
-    shipDate.setDate(shipDate.getDate() + 1);
-  }
-
-  return shipDate;
+  const distance = Math.abs(originCenter - destinationCenter);
+  const zone = fallbackZones.thresholds.find(
+    (threshold) => distance < threshold.maxSectionalCenterDistance,
+  );
+  return zone ? zone.transitDays : fallbackZones.maxTransitDays;
 }
 
-/**
- * Generate a fallback estimate when carrier API fails
- * Uses zone-based estimation
- */
-function generateFallbackEstimate(origin, destination, shipDate, settings) {
-  // Estimate transit days based on postal code zones
-  const transitDays = estimateTransitDays(
+function estimateFallbackTransit(origin, destination, shipDate) {
+  const transitDays = estimateTransitDaysByZone(
     origin.postalCode,
     destination.postalCode,
   );
-
   const deliveryDateMin = addBusinessDays(shipDate, transitDays);
-  const deliveryDateMax = addBusinessDays(shipDate, transitDays + 2);
-
-  const locationText = formatLocation(destination);
-  const dateText = settings.showExactDates
-    ? formatDateRange(deliveryDateMin, deliveryDateMax)
-    : formatTransitDays(transitDays);
-
   return {
-    success: true,
-    deliveryDateMin: deliveryDateMin.toISOString(),
-    deliveryDateMax: deliveryDateMax.toISOString(),
-    displayText: `Arrives ${dateText}`,
-    location: locationText,
+    deliveryDateMin,
+    deliveryDateMax: addBusinessDays(
+      deliveryDateMin,
+      deliveryWindow.estimatedExtraDays,
+    ),
     transitDays,
     isFallback: true,
   };
 }
 
-/**
- * Estimate transit days based on US postal code zones
- * This is a rough approximation when the carrier API is unavailable
- */
-function estimateTransitDays(originZip, destZip) {
-  if (!originZip || !destZip) return 5; // Default to 5 days
+function buildEstimate(transit, destination, shipDate, settings) {
+  const { deliveryDateMin, deliveryDateMax } = transit;
+  const minimumDays = businessDaysBetween(shipDate, deliveryDateMin);
+  const maximumDays = businessDaysBetween(shipDate, deliveryDateMax);
+  const dateText = settings.showExactDates
+    ? formatDateRange(deliveryDateMin, deliveryDateMax, displayLocale)
+    : `${minimumDays}-${maximumDays} business days`;
 
-  // Get the first 3 digits (sectional center)
-  const originSCF = parseInt(originZip.substring(0, 3), 10);
-  const destSCF = parseInt(destZip.substring(0, 3), 10);
-
-  // Very rough zone estimation based on SCF distance
-  const scfDiff = Math.abs(originSCF - destSCF);
-
-  if (scfDiff < 50) return 2; // Same region: 2 days
-  if (scfDiff < 200) return 3; // Nearby region: 3 days
-  if (scfDiff < 400) return 4; // Cross-region: 4 days
-  if (scfDiff < 600) return 5; // Cross-country: 5 days
-  return 6; // Coast-to-coast: 6 days
+  return {
+    success: true,
+    code: ESTIMATE_CODES.OK,
+    displayText: `Arrives ${dateText}`,
+    location: formatLocation(destination),
+    deliveryDateMin: toIsoDate(deliveryDateMin),
+    deliveryDateMax: toIsoDate(deliveryDateMax),
+    transitDays: transit.transitDays,
+    isFallback: !!transit.isFallback,
+  };
 }
 
-/**
- * Add business days to a date
- */
-function addBusinessDays(startDate, days) {
-  const result = new Date(startDate);
-  let added = 0;
-
-  while (added < days) {
-    result.setDate(result.getDate() + 1);
-    if (result.getDay() !== 0 && result.getDay() !== 6) {
-      added++;
-    }
-  }
-
-  return result;
-}
-
-/**
- * Format a date range for display
- * e.g., "Feb 10 - Feb 12" or "Feb 10 - 12" if same month
- */
-function formatDateRange(minDate, maxDate) {
-  const options = { month: "short", day: "numeric" };
-  const minStr = minDate.toLocaleDateString("en-US", options);
-
-  if (minDate.getMonth() === maxDate.getMonth()) {
-    return `${minStr} - ${maxDate.getDate()}`;
-  }
-
-  const maxStr = maxDate.toLocaleDateString("en-US", options);
-  return `${minStr} - ${maxStr}`;
-}
-
-/**
- * Format transit days for display
- * e.g., "3-5 business days"
- */
-function formatTransitDays(days) {
-  const max = days + 2;
-  return `${days}-${max} business days`;
-}
-
-/**
- * Format location for display
- * e.g., "Summerville, United States"
- */
+/** "Summerville, SC", or whatever parts are known. */
 function formatLocation(location) {
-  if (location.city && location.region) {
-    return `${location.city}, ${location.region}`;
-  }
-
-  if (location.city) {
-    return location.city;
-  }
-
-  return location.region || location.countryCode;
+  const parts = [location.city, location.region].filter(Boolean);
+  return parts.length > 0
+    ? parts.join(", ")
+    : location.postalCode || location.countryCode;
 }

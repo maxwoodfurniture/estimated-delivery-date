@@ -1,0 +1,73 @@
+{
+  "defaults": {
+    "warehouseCountryCode": "US",
+    "warehouseTimezone": "America/New_York",
+    "handlingTimeDays": 1,
+    "processingDays": [1, 2, 3, 4, 5],
+    "cutoffTime": "14:00",
+    "isEnabled": true,
+    "showExactDates": true
+  },
+  "limits": {
+    "handlingTimeDaysMin": 0,
+    "handlingTimeDaysMax": 14
+  },
+  "displayLocale": "en-US",
+  "deliveryWindow": {
+    "estimatedExtraDays": 2,
+    "carrierCommittedExtraDays": 1
+  },
+  "fallbackZones": {
+    "unknownTransitDays": 5,
+    "maxTransitDays": 6,
+    "thresholds": [
+      { "maxSectionalCenterDistance": 50, "transitDays": 2 },
+      { "maxSectionalCenterDistance": 200, "transitDays": 3 },
+      { "maxSectionalCenterDistance": 400, "transitDays": 4 },
+      { "maxSectionalCenterDistance": 600, "transitDays": 5 }
+    ]
+  },
+  "timeoutsMs": {
+    "geolocation": 3000,
+    "postalCodeLookup": 3000,
+    "carrier": 5000
+  },
+  "cache": {
+    "maxEntries": 5000,
+    "ttlSeconds": {
+      "ipLocation": 86400,
+      "postalCodeLocation": 2592000,
+      "carrierTransit": 21600
+    }
+  },
+  "carrierCredentialFields": [
+    "fedexApiKey",
+    "fedexSecretKey",
+    "fedexAccountNumber"
+  ],
+  "fedex": {
+    "packageWeightLb": 1,
+    "tokenExpirySafetySeconds": 300
+  },
+  "supportedCountries": [
+    { "code": "US", "label": "United States" }
+  ],
+  "timezones": [
+    { "value": "America/New_York", "label": "Eastern" },
+    { "value": "America/Chicago", "label": "Central" },
+    { "value": "America/Denver", "label": "Mountain" },
+    { "value": "America/Phoenix", "label": "Arizona" },
+    { "value": "America/Los_Angeles", "label": "Pacific" },
+    { "value": "America/Anchorage", "label": "Alaska" },
+    { "value": "Pacific/Honolulu", "label": "Hawaii" }
+  ],
+  "weekdays": [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday"
+  ]
+}

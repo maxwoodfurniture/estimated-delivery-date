@@ -1,0 +1,162 @@
+/* Estimated Delivery Date block. Per-block values arrive as custom properties. */
+
+.delivery-estimate {
+  display: block;
+  box-sizing: border-box;
+  margin: var(--delivery-estimate-margin-block) 0;
+  padding: var(--delivery-estimate-padding-block)
+    var(--delivery-estimate-padding-inline);
+  font-family: inherit;
+  font-size: var(--delivery-estimate-font-size);
+  font-weight: var(--delivery-estimate-font-weight);
+  line-height: 1.5;
+  color: var(--delivery-estimate-text-color);
+  background-color: var(--delivery-estimate-background);
+  border: 1px solid var(--delivery-estimate-border-color);
+  border-radius: var(--delivery-estimate-border-radius);
+}
+
+.delivery-estimate[hidden],
+.delivery-estimate [hidden] {
+  display: none !important;
+}
+
+.delivery-estimate *,
+.delivery-estimate *::before,
+.delivery-estimate *::after {
+  box-sizing: border-box;
+}
+
+.delivery-estimate__status,
+.delivery-estimate__result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375em;
+  margin: 0;
+}
+
+.delivery-estimate__spinner {
+  display: none;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: delivery-estimate-spin 1s linear infinite;
+}
+
+.delivery-estimate[aria-busy="true"] .delivery-estimate__spinner {
+  display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .delivery-estimate__spinner {
+    animation: none;
+  }
+}
+
+@keyframes delivery-estimate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.delivery-estimate__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.delivery-estimate__icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.delivery-estimate__date {
+  font-weight: var(--delivery-estimate-date-font-weight);
+}
+
+.delivery-estimate .delivery-estimate__location {
+  all: unset;
+  font: inherit;
+  color: var(--delivery-estimate-link-color);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.delivery-estimate .delivery-estimate__location:hover {
+  color: var(--delivery-estimate-link-hover-color);
+  text-decoration: none;
+}
+
+.delivery-estimate .delivery-estimate__location:focus-visible,
+.delivery-estimate .delivery-estimate__submit:focus-visible,
+.delivery-estimate .delivery-estimate__input:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.delivery-estimate__form {
+  display: block;
+  margin: 0.5em 0 0;
+}
+
+.delivery-estimate__label {
+  display: block;
+  margin: 0 0 0.25em;
+  font-size: 0.85em;
+}
+
+.delivery-estimate__form-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.delivery-estimate .delivery-estimate__input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  padding: 0.5em 0.75em;
+  font: inherit;
+  font-size: max(16px, 1em); /* avoids iOS zoom on focus */
+  color: #000;
+  background: #fff;
+  border: 1px solid #767676;
+  border-radius: 4px 0 0 4px;
+}
+
+.delivery-estimate .delivery-estimate__submit {
+  all: unset;
+  flex-shrink: 0;
+  padding: 0.5em 1em;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--delivery-estimate-button-color);
+  background: var(--delivery-estimate-button-background);
+  border: 1px solid var(--delivery-estimate-button-background);
+  border-radius: 0 4px 4px 0;
+}
+
+.delivery-estimate .delivery-estimate__submit:hover {
+  opacity: 0.9;
+}
+
+.delivery-estimate__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.delivery-estimate__message {
+  display: block;
+  margin: 0.25em 0 0;
+  color: #b3261e;
+}
